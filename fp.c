@@ -4,6 +4,35 @@
 
 #include <CL/cl.h>
 
+void check_error(int err, char *str){
+	if(err != CL_SUCCESS){
+		printf("ERROR: '%s'.\n", str);
+		switch(err){
+			case CL_INVALID_PROGRAM:
+				printf("CL_INVALID_PROGRAM.\n");
+				break;
+			case CL_INVALID_PROGRAM_EXECUTABLE:
+				printf("CL_INVALID_PROGRAM_EXECUTABLE.\n");
+				break;
+			case CL_INVALID_KERNEL_NAME:
+				printf("CL_INVALID_KERNEL_NAME.\n");
+				break;
+			case CL_INVALID_KERNEL_DEFINITION:
+				printf("CL_INVALID_KERNEL_DEFINITION.\n");
+				break;
+			case CL_INVALID_VALUE:
+				printf("CL_INVALID_VALUE.\n");
+				break;
+			case CL_OUT_OF_HOST_MEMORY:
+				printf("CL_OUT_OF_HOST_MEMORY.\n");
+				break;
+			default:
+				printf("default err.\n");
+				break;
+		}
+		exit(1);
+	}
+}
 
 void error(char *str){
 	printf("%s\n", str);
@@ -81,9 +110,15 @@ int main(){
 
 	cl_program prog = clCreateProgramWithSource(context, 1, (const char**)&clfile, NULL, NULL);
 
-	clBuildProgram(prog, 0, NULL, NULL, NULL, NULL);
+	check_error(clBuildProgram(prog, 0, NULL, NULL, NULL, NULL), "couldn't build program.");
 
-	cl_kernel kernel = clCreateKernel(prog, "mult_gpu", NULL);
+	cl_kernel kernel = clCreateKernel(prog, "MULT", &status);
+
+	check_error(status, "couldn't build kernel");
+
+	cl_command_queue queue = clCreateCommandQueue(context, devices[0], 0, &status);
+
+	check_error(status, "couldn't make command queue.");
 
 
 	//clBuildProgram(program
@@ -94,8 +129,8 @@ int main(){
 	
 	float *x = (float*)malloc(sizeof(float) * input_size);
 	float *w = (float*)malloc(sizeof(float) * neurons * input_size);
+	float *y = (float*)malloc(sizeof(float) * neurons);
 
-	//create 
 	for(int i = 0; i < 10; i++){
 		for(int j = 0; j < input_size; j++){
 			x[j] = uniform(-1, 1);
@@ -107,13 +142,16 @@ int main(){
 		if(status != CL_SUCCESS) error("failed to create clmem from x");
 		cl_mem weight_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * input_size * neurons, w, &status);
 		if(status != CL_SUCCESS) error("failed to create clmem from weights");
-		cl_mem output_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * neurons, w, &status);
+		cl_mem output_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * neurons, y, &status);
 		if(status != CL_SUCCESS) error("failed to create clmem from output buf");
 
 		clSetKernelArg(kernel, 0, sizeof(cl_mem), &input_buffer);
 		clSetKernelArg(kernel, 1, sizeof(cl_mem), &output_buffer);
 		clSetKernelArg(kernel, 2, sizeof(cl_mem), &weight_buffer);
-		clSetKernelArg(kernel, 2, sizeof(int), input_size);
+		clSetKernelArg(kernel, 2, sizeof(int), &input_size);
+
+		printf("about to enqueue\n");
+		check_error(clEnqueueNDRangeKernel(queue, output_buffer, 1, NULL, &neurons, 64, 0, NULL, NULL), "couldn't enqueue kernel.");
 		exit(1);
 	}
 
