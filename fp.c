@@ -1,12 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <string.h>
 
 #include <CL/cl.h>
 
 void check_error(int err, char *str){
 	if(err != CL_SUCCESS){
-		printf("ERROR: '%s'.\n", str);
+		printf("ERROR: '%s': ", str);
 		switch(err){
 			case CL_INVALID_PROGRAM:
 				printf("CL_INVALID_PROGRAM.\n");
@@ -26,6 +27,30 @@ void check_error(int err, char *str){
 			case CL_OUT_OF_HOST_MEMORY:
 				printf("CL_OUT_OF_HOST_MEMORY.\n");
 				break;
+      case CL_INVALID_COMMAND_QUEUE:
+        printf("CL_INVALID_COMMAND_QUEUE.\n");
+        break;
+      case CL_INVALID_KERNEL:
+        printf("CL_INVALID_KERNEL.\n");
+        break;
+      case CL_INVALID_CONTEXT:
+        printf("CL_INVALID_CONTEXT.\n");
+        break;
+      case CL_INVALID_KERNEL_ARGS:
+        printf("CL_INVALID_KERNEL_ARGS.\n");
+        break;
+      case CL_INVALID_WORK_DIMENSION:
+        printf("CL_INVALID_WORK_DIMENSION.\n");
+        break;
+      case CL_INVALID_WORK_GROUP_SIZE:
+        printf("CL_INVALID_WORK_GROUP_SIZE.\n");
+        break;
+      case CL_INVALID_WORK_ITEM_SIZE:
+        printf("CL_INVALID_WORK_ITEM_SIZE.\n");
+        break;
+      case CL_INVALID_GLOBAL_OFFSET:
+        printf("CL_INVALID_GLOBAL_OFFSET.\n");
+        break;
 			default:
 				printf("default err.\n");
 				break;
@@ -48,11 +73,11 @@ float uniform(float minimum, float maximum){
 		return center - ((((float)rand())/RAND_MAX)) * max_mag;
 }
 
-void mult_cpu(const float *x, const float **w, float *dest, size_t size, size_t inputsize){
+void mult_cpu(const float *x, const float *w, float *dest, size_t size, size_t inputsize){
 	for(int i = 0; i < size; i++){
 		dest[i] = 0;
 		for(int j = 0; j < inputsize; j++){
-			dest[i] += w[i][j] * x[j];
+			dest[i] += w[i*inputsize + j] * x[j];
 		}
 	}
 }
@@ -124,12 +149,15 @@ int main(){
 	//clBuildProgram(program
 
 	/* End setup */
-	size_t input_size = 95;
-	size_t neurons = 500;
+	size_t input_size = 10000;
+	size_t neurons = 10000;
+
+  size_t local_item_size = 100;
 	
 	float *x = (float*)malloc(sizeof(float) * input_size);
 	float *w = (float*)malloc(sizeof(float) * neurons * input_size);
-	float *y = (float*)malloc(sizeof(float) * neurons);
+	float *y_gpu = (float*)malloc(sizeof(float) * neurons);
+	float *y_cpu = (float*)malloc(sizeof(float) * neurons);
 
 	for(int i = 0; i < 10; i++){
 		for(int j = 0; j < input_size; j++){
@@ -139,23 +167,48 @@ int main(){
 			w[j] = uniform(-1, 1);
 		}
 		cl_mem input_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * input_size, x, &status);
-		if(status != CL_SUCCESS) error("failed to create clmem from x");
+		check_error(status, "failed to create clmem from x");
+
 		cl_mem weight_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * input_size * neurons, w, &status);
-		if(status != CL_SUCCESS) error("failed to create clmem from weights");
-		cl_mem output_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * neurons, y, &status);
-		if(status != CL_SUCCESS) error("failed to create clmem from output buf");
+		check_error(status, "failed to create clmem from weights");
+
+		cl_mem output_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, sizeof(float) * neurons, NULL, &status);
+		check_error(status, "failed to create clmem from output buf");
 
 		clSetKernelArg(kernel, 0, sizeof(cl_mem), &input_buffer);
 		clSetKernelArg(kernel, 1, sizeof(cl_mem), &output_buffer);
 		clSetKernelArg(kernel, 2, sizeof(cl_mem), &weight_buffer);
-		clSetKernelArg(kernel, 2, sizeof(int), &input_size);
+		clSetKernelArg(kernel, 3, sizeof(int), &input_size);
 
-		printf("about to enqueue\n");
-		check_error(clEnqueueNDRangeKernel(queue, output_buffer, 1, NULL, &neurons, 64, 0, NULL, NULL), "couldn't enqueue kernel.");
-		exit(1);
+		check_error(clEnqueueNDRangeKernel(queue, kernel, 1, NULL, &neurons, &local_item_size, 0, NULL, NULL), "couldn't enqueue kernel.");
+    clock_t start = clock();
+    check_error(clEnqueueReadBuffer(queue, output_buffer, CL_TRUE, 0, sizeof(float) * neurons, y_gpu, 0, NULL, NULL), "couldn't read kernel output");
+    float gpu_time = ((float)(clock() - start)) / CLOCKS_PER_SEC;
+
+    
+    start = clock();
+    mult_cpu(x, w, y_cpu, neurons, input_size);
+    float cpu_time = ((float)(clock() - start)) / CLOCKS_PER_SEC;
+    for(int i = 0; i < neurons; i++){
+      //printf("margin: %f\n", y_gpu[i] - y_cpu[i]);
+    }
+    printf("trial %d: gpu took %6.5f seconds, cpu took %6.5f seconds (gpu %f times faster)\n", i+1, gpu_time, cpu_time, cpu_time/gpu_time);
+    check_error(clFlush(queue), "flushing cmd queue");
+    check_error(clReleaseMemObject(input_buffer), "releasing input buffer");
+    check_error(clReleaseMemObject(weight_buffer), "releasing weight buffer");
+    check_error(clReleaseMemObject(output_buffer), "releasing output buffer");
+
 	}
+  free(x);
+  free(w);
+  free(y_gpu);
+  free(y_cpu);
 
-	float *input;
+  check_error(clFinish(queue), "done with cmd queue");
+  check_error(clReleaseKernel(kernel), "releasing kernel");
+  check_error(clReleaseProgram(prog), "releasing program");
+  check_error(clReleaseCommandQueue(queue), "releasing queue");
+  check_error(clReleaseContext(context), "releasing context");
 
 	printf("completed.\n");
 }
