@@ -2,8 +2,17 @@
 #include <stdlib.h>
 #include <time.h>
 #include <string.h>
+#include <math.h>
 
 #include <CL/cl.h>
+
+//#define str(x) #x
+
+#define xstr(s) str(s)
+#define str(s) #s
+
+#define SIGM(x) (1/(1+exp(-x)))
+
 
 void check_error(int err, char *str){
 	if(err != CL_SUCCESS){
@@ -85,6 +94,9 @@ void mult_cpu(const float *x, const float *w, float *dest, size_t size, size_t i
 int main(){
 	int status = 0;
 
+
+	float x1 = 1;
+	printf("stringifying macro: '%s' and '%s'\n", str(SIGM(x1)), xstr(SIGM(x1)));
 	/* Start setup */
 	cl_uint num_platforms, num_devices;
 	status = clGetPlatformIDs(0, NULL, &num_platforms);
@@ -146,8 +158,6 @@ int main(){
 	check_error(status, "couldn't make command queue.");
 
 
-	//clBuildProgram(program
-
 	/* End setup */
 	size_t input_size = 10000;
 	size_t neurons = 10000;
@@ -180,8 +190,8 @@ int main(){
 		clSetKernelArg(kernel, 2, sizeof(cl_mem), &weight_buffer);
 		clSetKernelArg(kernel, 3, sizeof(int), &input_size);
 
-		check_error(clEnqueueNDRangeKernel(queue, kernel, 1, NULL, &neurons, &local_item_size, 0, NULL, NULL), "couldn't enqueue kernel.");
     clock_t start = clock();
+		check_error(clEnqueueNDRangeKernel(queue, kernel, 1, NULL, &neurons, &local_item_size, 0, NULL, NULL), "couldn't enqueue kernel.");
     check_error(clEnqueueReadBuffer(queue, output_buffer, CL_TRUE, 0, sizeof(float) * neurons, y_gpu, 0, NULL, NULL), "couldn't read kernel output");
     float gpu_time = ((float)(clock() - start)) / CLOCKS_PER_SEC;
 
@@ -189,10 +199,11 @@ int main(){
     start = clock();
     mult_cpu(x, w, y_cpu, neurons, input_size);
     float cpu_time = ((float)(clock() - start)) / CLOCKS_PER_SEC;
+		float sqe = 0;
     for(int i = 0; i < neurons; i++){
-      //printf("margin: %f\n", y_gpu[i] - y_cpu[i]);
+			sqe += sqrt(y_gpu[i]*y_gpu[i] - y_cpu[i]*y_cpu[i]);
     }
-    printf("trial %d: gpu took %6.5f seconds, cpu took %6.5f seconds (gpu %f times faster)\n", i+1, gpu_time, cpu_time, cpu_time/gpu_time);
+    printf("trial %d: gpu took %6.5f seconds, cpu took %6.5f seconds (gpu %f times faster), mean error %f\n", i+1, gpu_time, cpu_time, cpu_time/gpu_time, sqe);
     check_error(clFlush(queue), "flushing cmd queue");
     check_error(clReleaseMemObject(input_buffer), "releasing input buffer");
     check_error(clReleaseMemObject(weight_buffer), "releasing weight buffer");
